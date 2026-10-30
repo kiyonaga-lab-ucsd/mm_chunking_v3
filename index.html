@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Central Cue Memory Experiment</title>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+    <script src="https://unpkg.com/jspsych@7.3.4"></script>
+    <script src="jspsych_lib/mm_central_cue.js"></script>
+    <link href="jspsych_lib/jspsych.css" rel="stylesheet" type="text/css">
+    <script src="https://unpkg.com/@jspsych-contrib/plugin-pipe"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-fullscreen@1.2.1"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-instructions@1.1.4"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response@1.2.0"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@1.2.0"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text@1.1.4"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-call-function@1.1.3"></script>
+
+    <style>
+        body { font-family: Georgia, serif; }
+        #jspsych-content { background: #f4f4f4; }
+    </style>
+</head>
+<body></body>
+
+<script>
+
+/* Init jsPsych */
+const jsPsych = initJsPsych({
+    show_progress_bar: true,
+    auto_update_progress_bar: false,
+    on_finish: () => {
+        // TODO: if this is a new SONA study, update experiment_id and credit_token
+        const sona_url = `https://ucsd.sona-systems.com/webstudy_credit.aspx?experiment_id=3108&credit_token=3974845ab68c4a63a156799454da879b&survey_code=${raw_sona_id}`;
+        window.location = sona_url;
+    }
+});
+
+// Random participant ID
+const unique_participant_id = jsPsych.randomization.randomID(10);
+const filename = `mm_central_cue_${unique_participant_id}.csv`;
+jsPsych.data.addProperties({ unique_participant_id });
+
+// SONA id from URL parameters
+const url_params = new URLSearchParams(window.location.search);
+const raw_sona_id = url_params.get('participant');
+if (raw_sona_id) {
+    jsPsych.data.addProperties({ raw_sona_id });
+}
+
+const DEBUG = {
+    enabled: false,
+    max_blocks: 1 // do only first ${max_blocks} blocks
+};
+
+const timeline = [];
+
+
+/* ======================================================================
+   TRIAL GENERATION
+   ----------------------------------------------------------------------
+   Items 0,1 = temporal group 1 (shown first, on the LEFT)
+   Items 2,3 = temporal group 2 (shown second, on the RIGHT)
+
+   On every trial one item (cue_index) is shown at the center.
+   Then:
+     45% same_group  → probe the OTHER item from the cue's group
+                       (cue 0 → probe 1, cue 2 → probe 3, etc.)
+     45% other_group → probe one of the two items from the other group
+     10% side_report → no color report; press Left/Right to say which
+                       side the central color came from
+   The probed item is never the cued item.
+
+   Fully balanced design: for each of the 4 cue items,
+     same_group:  2 * N_PER_CELL trials (one possible probe)
+     other_group: N_PER_CELL trials for each of the 2 possible probes
+     side_report: (4/9) * N_PER_CELL trials
+   → per cue: 2N + 2N + (4/9)N  → ratio 45 : 45 : 10
+   N_PER_CELL must be a multiple of 9.
+   ====================================================================== */
+
+const N_PER_CELL = 18; // → 320 trials total (144 same, 144 other, 32 side)
+
+function buildDesign(nPerCell) {
+    if (nPerCell % 9 !== 0) throw new Error('N_PER_CELL must be a multiple of 9.');
+    const nSidePerCue = (nPerCell * 4) / 9;
+    const vars = [];
+    for (let cue = 0; cue < 4; cue++) {
+        const partner = cue ^ 1;                      // 0↔1, 2↔3
+        const others  = cue < 2 ? [2, 3] : [0, 1];
+
+        for (let t = 0; t < 2 * nPerCell; t++) {
+            vars.push({ trial_condition: 'same_group', cue_index: cue, probe_index: partner });
+        }
+        for (const p of others) {
+            for (let t = 0; t < nPerCell; t++) {
+                vars.push({ trial_condition: 'other_group', cue_index: cue, probe_index: p });
+            }
+        }
+        for (let t = 0; t < nSidePerCue; t++) {
+            vars.push({ trial_condition: 'side_report', cue_index: cue, probe_index: null });
+        }
+    }
+    return vars;
+}
+
+const allTrialVars = jsPsych.randomization.shuffle(buildDesign(N_PER_CELL));
+const total_trials = allTrialVars.length;
+
+// Split into blocks
+const blockSize = 32;
+if (total_trials % blockSize !== 0) {
+    throw new Error("Your trial numbers are not divisible by the block size!");
+}
+let blocks = [];
+for (let i = 0; i < allTrialVars.length; i += blockSize) {
+    blocks.push(allTrialVars.slice(i, i + blockSize));
+}
+if (DEBUG.enabled) {
+    blocks = blocks.slice(0, DEBUG.max_blocks);
+}
+
+// Practice: 16 trials, roughly matching the main proportions (7 same, 7 other, 2 side)
+function buildPractice() {
+    const pool = buildDesign(9);
+    const pick = (cond, n) => jsPsych.randomization.shuffle(
+        pool.filter(v => v.trial_condition === cond)
+    ).slice(0, n);
+    return jsPsych.randomization.shuffle([
+        ...pick('same_group', 7),
+        ...pick('other_group', 7),
+        ...pick('side_report', 2),
+    ]);
+}
+const practiceVars = buildPractice();
+
+let trial_count = 0;
+function update_progress_bar() {
+    trial_count = trial_count + 1;
+    jsPsych.setProgressBar(trial_count / total_trials);
+}
+
+// Shared trial definition
+function makeTrial(isPractice) {
+    const t = {
+        type:            jsPsychMMCentralCue,
+        trial_condition: jsPsych.timelineVariable('trial_condition'),
+        cue_index:       jsPsych.timelineVariable('cue_index'),
+        probe_index:     jsPsych.timelineVariable('probe_index'),
+        is_practice:     isPractice,
+        feedback:        true,
+    };
+    if (!isPractice) t.on_finish = update_progress_bar;
+    return t;
+}
+
+
+/* ======================================================================
+   INSTRUCTIONS
+   ====================================================================== */
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: [
+        '<p>Welcome to this experiment!</p><p><strong>In order to participate, you must be on a laptop or desktop computer.</strong></p>',
+
+        '<p>In this experiment, you will be briefly remembering some colors.</p><p>You will complete ' + total_trials + ' trials, each of which lasts around 5 seconds. These trials will be split across ' + blocks.length + ' blocks, and you can feel free to take breaks in between blocks. The entire experiment should not last longer than one hour.</p><p><strong>Please do not participate if you do not have normal color vision.</strong></p>',
+
+        '<p>Before each trial starts, you will see four placeholder circles. Shortly after, the two circles on the left will be filled with colors. Then, these two colors will disappear, and two new colors will appear in the circles on the right.</p><p>Your task is to remember the color that was shown in each location. Please pay close attention throughout the entire trial, since the colors will be presented very briefly.</p>',
+        // TODO: add a screenshot here, e.g. <p align="center"><img src="instruction_screenshots/example_present_colors.png" width="500"></p>
+
+        '<p>During the task, you may be tempted to remember the colors by repeating the name of that color to yourself. However, we are interested in your visual, not verbal, memory, so please avoid doing so. If you still find yourself repeating the name of a color to yourself, we suggest you repeat the word "the" over and over again. This will help prevent you from using words to describe and remember the colors.</p>',
+
+        '<p>After all four colors have been shown, one of those four colors will briefly appear in the <strong>center</strong> of the screen. Please pay attention to this central color.</p>',
+        // TODO: add a screenshot of the central color here
+
+        '<p>On most trials, one of the placeholder circles will then get a darker border. Your task is to report the color that was shown in that location.</p><p>To do this, a color wheel will appear. Move your mouse around the wheel; the darkened circle will preview the color under your mouse. When you find the color that you believe matches the one that was shown in the darkened location, click on the wheel to lock in your answer.</p><p>Please respond as quickly as possible. You do not need to strive for perfection; click once you are relatively satisfied with your answer.</p>',
+        // TODO: add a screenshot of the color wheel report here
+
+        '<p>On a small number of trials, there will be no color wheel. Instead, you will be asked <strong>which side of the screen the central color was originally shown on</strong>. Click the <strong>Left</strong> or <strong>Right</strong> button to answer.</p>',
+    ],
+    show_clickable_nav: true,
+    button_label_next: 'Continue',
+});
+
+
+/* ======================================================================
+   PRACTICE
+   ====================================================================== */
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: ['<p>First, you will complete some practice trials. Press "Practice" to continue.</p>'],
+    show_clickable_nav: true,
+    button_label_next: 'Practice',
+});
+
+timeline.push({
+    timeline: [makeTrial(true)],
+    timeline_variables: practiceVars,
+    randomize_order: false,
+});
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: ['<p>You have completed the practice. Press "Continue" to proceed to the main task.</p>'],
+    show_clickable_nav: true,
+    button_label_next: 'Continue',
+});
+
+
+/* ======================================================================
+   MAIN BLOCKS
+   ====================================================================== */
+
+blocks.forEach((blockVars, blockIndex) => {
+    timeline.push({
+        timeline: [makeTrial(false)],
+        timeline_variables: blockVars,
+        randomize_order: false, // already shuffled above
+    });
+
+    if (blockIndex < blocks.length - 1) {
+        timeline.push({
+            type: jsPsychHtmlButtonResponse,
+            stimulus: `<p>You've completed block ${blockIndex + 1} of ${blocks.length}.</p>
+                       <p>Take a short break whenever you're ready.</p>`,
+            choices: ['Continue'],
+        });
+    }
+});
+
+
+/* ======================================================================
+   END
+   ====================================================================== */
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: ['<p>Thank you for participating!</p><p>Press "Back to SONA" to be taken back to SONA</p><p><strong>You must do so in order to receive credit!</strong></p>'],
+    show_clickable_nav: true,
+    button_label_next: 'Back to SONA',
+});
+
+timeline.push({
+    type: jsPsychPipe,
+    action: "save",
+    experiment_id: "Hx6GxC7mZk8P", // TODO: replace with this experiment's DataPipe ID
+    filename: filename,
+    data_string: () => jsPsych.data.get().csv()
+});
+
+jsPsych.run(timeline);
+
+</script>
+</html>
