@@ -48,9 +48,9 @@ var jsPsychMMCentralCue = (function (jspsych) {
             },
 
             // --- Timing (ms) ---
-            display_time:   { type: jspsych.ParameterType.INT, default: 1000, description: 'Duration each set of stimuli is shown.' },
-            isi_time:       { type: jspsych.ParameterType.INT, default: 750,  description: 'ISI between sets, and between set 2 and the cue.' },
-            cue_time:       { type: jspsych.ParameterType.INT, default: 750,  description: 'Duration the central cue is shown.' },
+            display_time:   { type: jspsych.ParameterType.INT, default: 750, description: 'Duration each set of stimuli is shown.' },
+            isi_time:       { type: jspsych.ParameterType.INT, default: 500,  description: 'ISI between sets, and between set 2 and the cue.' },
+            cue_time:       { type: jspsych.ParameterType.INT, default: 500,  description: 'Duration the central cue is shown.' },
             post_cue_delay: { type: jspsych.ParameterType.INT, default: 500,  description: 'Delay after the central cue before the probe.' },
             iti:            { type: jspsych.ParameterType.INT, default: 1000, description: 'Inter-trial interval.' },
             feedback_time:  { type: jspsych.ParameterType.INT, default: 1500, description: 'Duration of feedback (if shown).' },
